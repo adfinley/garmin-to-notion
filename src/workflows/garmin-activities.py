@@ -1,329 +1,125 @@
-from datetime import datetime, UTC, timedelta
+from datetime import timedelta
 
-import pytz
 from dotenv import load_dotenv
 from garminconnect import Garmin as GarminClient
 from notion_client import Client as NotionClient
 
 from src.helpers import get_garmin_client, get_notion_client
 
-# Your local time zone, replace with the appropriate one if needed
-local_tz = pytz.timezone('America/Toronto')
+# Garmin activity typeKeys that count as runs. Everything else is skipped.
+RUN_TYPE_KEYS = {"running", "trail_running", "track_running", "treadmill_running"}
 
-ACTIVITY_ICONS = {
-    "Barre": "https://img.icons8.com/?size=100&id=66924&format=png&color=000000",
-    "Breathwork": "https://img.icons8.com/?size=100&id=9798&format=png&color=000000",
-    "Cardio": "https://img.icons8.com/?size=100&id=71221&format=png&color=000000",
-    "Cycling": "https://img.icons8.com/?size=100&id=47443&format=png&color=000000",
-    "Hiking": "https://img.icons8.com/?size=100&id=9844&format=png&color=000000",
-    "Indoor Cardio": "https://img.icons8.com/?size=100&id=62779&format=png&color=000000",
-    "Indoor Cycling": "https://img.icons8.com/?size=100&id=47443&format=png&color=000000",
-    "Indoor Rowing": "https://img.icons8.com/?size=100&id=71098&format=png&color=000000",
-    "Pilates": "https://img.icons8.com/?size=100&id=9774&format=png&color=000000",
-    "Meditation": "https://img.icons8.com/?size=100&id=9798&format=png&color=000000",
-    "Rowing": "https://img.icons8.com/?size=100&id=71491&format=png&color=000000",
-    "Running": "https://img.icons8.com/?size=100&id=k1l1XFkME39t&format=png&color=000000",
-    "Strength Training": "https://img.icons8.com/?size=100&id=107640&format=png&color=000000",
-    "Stretching": "https://img.icons8.com/?size=100&id=djfOcRn1m_kh&format=png&color=000000",
-    "Swimming": "https://img.icons8.com/?size=100&id=9777&format=png&color=000000",
-    "Treadmill Running": "https://img.icons8.com/?size=100&id=9794&format=png&color=000000",
-    "Walking": "https://img.icons8.com/?size=100&id=9807&format=png&color=000000",
-    "Yoga": "https://img.icons8.com/?size=100&id=9783&format=png&color=000000",
-    # Add more mappings as needed
-}
+# Default value for the "Type" select when a run is first created. Change it in Notion afterwards.
+DEFAULT_RUN_TYPE = "Easy"
+
+RUNNING_ICON = "https://img.icons8.com/?size=100&id=k1l1XFkME39t&format=png&color=000000"
 
 
 def get_all_activities(garmin_client: GarminClient, limit: int = 1000) -> list[dict]:
     return garmin_client.get_activities(0, limit)
 
 
-def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[str, str]:
-    # First format the activity type as before
-    formatted_type = activity_type.replace('_', ' ').title() if activity_type else "Unknown"
-
-    # Initialize subtype as the same as the main type
-    activity_subtype = formatted_type
-    activity_type = formatted_type
-
-    # Map of specific subtypes to their main types
-    activity_mapping = {
-        "Barre": "Strength",
-        "Indoor Cardio": "Cardio",
-        "Indoor Cycling": "Cycling",
-        "Indoor Rowing": "Rowing",
-        "Speed Walking": "Walking",
-        "Strength Training": "Strength",
-        "Treadmill Running": "Running"
-    }
-
-    # Special replacement for Rowing V2
-    if formatted_type == "Rowing V2":
-        activity_type = "Rowing"
-
-    # Special case for Yoga and Pilates
-    elif formatted_type in ["Yoga", "Pilates"]:
-        activity_type = "Yoga/Pilates"
-        activity_subtype = formatted_type
-
-    # If the formatted type is in our mapping, update both main type and subtype
-    if formatted_type in activity_mapping:
-        activity_type = activity_mapping[formatted_type]
-        activity_subtype = formatted_type
-
-    # Special cases for activity names
-    if activity_name and "meditation" in activity_name.lower():
-        return "Meditation", "Meditation"
-    if activity_name and "barre" in activity_name.lower():
-        return "Strength", "Barre"
-    if activity_name and "stretch" in activity_name.lower():
-        return "Stretching", "Stretching"
-
-    return activity_type, activity_subtype
+def is_run(activity: dict) -> bool:
+    return activity.get("activityType", {}).get("typeKey") in RUN_TYPE_KEYS
 
 
-def format_entertainment(activity_name: str) -> str:
-    return activity_name.replace('ENTERTAINMENT', 'Netflix')
+def format_date(activity: dict) -> str:
+    # startTimeLocal is the wall-clock time on the watch ("2026-10-21 06:45:12"), so the date is the
+    # day you actually ran, regardless of timezone. We only keep the date part.
+    return activity["startTimeLocal"].split(" ")[0]
 
 
-def format_training_message(message: str) -> str:
-    messages = {
-        'NO_': 'No Benefit',
-        'MINOR_': 'Some Benefit',
-        'RECOVERY_': 'Recovery',
-        'MAINTAINING_': 'Maintaining',
-        'IMPROVING_': 'Impacting',
-        'IMPACTING_': 'Impacting',
-        'HIGHLY_': 'Highly Impacting',
-        'OVERREACHING_': 'Overreaching'
-    }
-    for key, value in messages.items():
-        if message.startswith(key):
-            return value
-    return message
-
-
-def format_training_effect(training_effect_label: str) -> str:
-    return training_effect_label.replace('_', ' ').title()
+def format_duration(seconds: float) -> str:
+    # 2712 -> "45:12", 5025 -> "1:23:45"
+    total = int(round(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
 
 
 def format_pace(average_speed: float) -> str:
-    if average_speed > 0:
-        pace_min_km = 1000 / (average_speed * 60)  # Convert to min/km
-        minutes = int(pace_min_km)
-        seconds = int((pace_min_km - minutes) * 60)
-        return f"{minutes}:{seconds:02d} min/km"
-    else:
+    # Garmin's averageSpeed is in m/s. Returns min/km as "5:30" (no unit suffix).
+    if not average_speed or average_speed <= 0:
         return ""
+    total_seconds = int(round(1000 / average_speed))
+    minutes, secs = divmod(total_seconds, 60)
+    return f"{minutes}:{secs:02d}"
 
 
-def activity_exists(
-    notion_client: NotionClient,
-    database_id: str,
-    activity_date: datetime,
-    activity_type: str,
-    activity_name: str,
-) -> dict | None:
-    # Check if an activity already exists in the Notion database and return it if found.
+def build_properties(activity: dict) -> dict:
+    moving_seconds = activity.get("movingDuration") or activity.get("duration") or 0
 
-    # Determine the correct activity type for the lookup
-    lookup_type = "Stretching" if "stretch" in activity_name.lower() else activity_type
+    properties = {
+        "Activity Name": {"title": [{"text": {"content": activity.get("activityName") or "Run"}}]},
+        "Date": {"date": {"start": format_date(activity)}},
+        "Moving Time": {"rich_text": [{"text": {"content": format_duration(moving_seconds)}}]},
+        "Distance": {"number": round((activity.get("distance") or 0) / 1000, 2)},
+        "Pace": {"rich_text": [{"text": {"content": format_pace(activity.get("averageSpeed", 0))}}]},
+        "Type": {"select": {"name": DEFAULT_RUN_TYPE}},
+        # Not mapped on purpose: Zone (formula), Shoes (manual relation).
+    }
 
-    # Create a time window to search for the activity. Notion has been observed to truncate datetimes to the minutes in
-    # some instances, causing the lookup using exact datetime to fail.
-    # TODO: We should store the activity ID in the Notion page to avoid this complexity.
-    lookup_min_date = activity_date - timedelta(minutes=5)
-    lookup_max_date = activity_date + timedelta(minutes=5)
+    average_hr = activity.get("averageHR")
+    if average_hr:
+        properties["Heart Rate"] = {"number": round(average_hr)}
 
+    # Only present if you typed a description/notes on the activity in Garmin Connect.
+    description = (activity.get("description") or "").strip()
+    if description:
+        # Notion caps a single rich text block at 2000 characters.
+        properties["Description"] = {"rich_text": [{"text": {"content": description[:2000]}}]}
+
+    return properties
+
+
+def activity_exists(notion_client: NotionClient, database_id: str, activity: dict) -> bool:
+    # Date is date-only and there is no Garmin ID column, so match on same day + same distance.
+    # This keeps working if you rename the run or change its Type in Notion.
     query = notion_client.databases.query(
         database_id=database_id,
         filter={
             "and": [
-                {"property": "Date", "date": {"on_or_after": lookup_min_date.isoformat()}},
-                {"property": "Date", "date": {"on_or_before": lookup_max_date.isoformat()}},
-                # Further refine the search by activity type and name
-                {"property": "Activity Type", "select": {"equals": lookup_type}},
-                {"property": "Activity Name", "title": {"equals": activity_name}}
+                {"property": "Date", "date": {"equals": format_date(activity)}},
+                {"property": "Distance", "number": {"equals": round((activity.get("distance") or 0) / 1000, 2)}},
             ]
-        }
+        },
+        page_size=1,
     )
-    results = query['results']
-    return results[0] if results else None
-
-
-def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
-    existing_props = existing_activity['properties']
-
-    activity_name = new_activity.get('activityName', '').lower()
-    activity_type, activity_subtype = format_activity_type(
-        new_activity.get('activityType', {}).get('typeKey', 'Unknown'),
-        activity_name
-    )
-
-    # Check if 'Subactivity Type' property exists
-    has_subactivity = (
-        'Subactivity Type' in existing_props and
-        existing_props['Subactivity Type'] is not None and
-        existing_props['Subactivity Type'].get('select') is not None
-    )
-
-    return (
-        existing_props['Distance (km)']['number'] != round(new_activity.get('distance', 0) / 1000, 2) or
-        existing_props['Duration (min)']['number'] != round(new_activity.get('duration', 0) / 60, 2) or
-        existing_props['Calories']['number'] != round(new_activity.get('calories', 0)) or
-        existing_props['Avg Pace']['rich_text'][0]['text']['content'] != format_pace(
-        new_activity.get('averageSpeed', 0)
-    ) or
-        existing_props['Avg Power']['number'] != round(new_activity.get('avgPower', 0), 1) or
-        existing_props['Max Power']['number'] != round(new_activity.get('maxPower', 0), 1) or
-        existing_props['Training Effect']['select']['name'] != format_training_effect(
-        new_activity.get('trainingEffectLabel', 'Unknown')
-    ) or
-        existing_props['Aerobic']['number'] != round(new_activity.get('aerobicTrainingEffect', 0), 1) or
-        existing_props['Aerobic Effect']['select']['name'] != format_training_message(
-        new_activity.get('aerobicTrainingEffectMessage', 'Unknown')
-    ) or
-        existing_props['Anaerobic']['number'] != round(new_activity.get('anaerobicTrainingEffect', 0), 1) or
-        existing_props['Anaerobic Effect']['select']['name'] != format_training_message(
-        new_activity.get('anaerobicTrainingEffectMessage', 'Unknown')
-    ) or
-        existing_props['PR']['checkbox'] != new_activity.get('pr', False) or
-        existing_props['Fav']['checkbox'] != new_activity.get('favorite', False) or
-        existing_props['Activity Type']['select']['name'] != activity_type or
-        (has_subactivity and existing_props['Subactivity Type']['select']['name'] != activity_subtype) or
-        (not has_subactivity)  # If the property doesn't exist, we need an update
-    )
+    return bool(query["results"])
 
 
 def create_activity(notion_client: NotionClient, database_id: str, activity: dict) -> None:
-    # Create a new activity in the Notion database
-    activity_date = activity.get('startTimeGMT')
-    activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
-    activity_type, activity_subtype = format_activity_type(
-        activity.get('activityType', {}).get('typeKey', 'Unknown'),
-        activity_name
+    notion_client.pages.create(
+        parent={"database_id": database_id},
+        properties=build_properties(activity),
+        icon={"type": "external", "external": {"url": RUNNING_ICON}},
     )
-
-    # Get icon for the activity type
-    icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
-
-    properties = {
-        "Date": {"date": {"start": activity_date}},
-        "Activity Type": {"select": {"name": activity_type}},
-        "Subactivity Type": {"select": {"name": activity_subtype}},
-        "Activity Name": {"title": [{"text": {"content": activity_name}}]},
-        "Distance (km)": {"number": round(activity.get('distance', 0) / 1000, 2)},
-        "Duration (min)": {"number": round(activity.get('duration', 0) / 60, 2)},
-        "Calories": {"number": round(activity.get('calories', 0))},
-        "Avg Pace": {"rich_text": [{"text": {"content": format_pace(activity.get('averageSpeed', 0))}}]},
-        "Avg Power": {"number": round(activity.get('avgPower', 0), 1)},
-        "Max Power": {"number": round(activity.get('maxPower', 0), 1)},
-        "Training Effect": {"select": {"name": format_training_effect(activity.get('trainingEffectLabel', 'Unknown'))}},
-        "Aerobic": {"number": round(activity.get('aerobicTrainingEffect', 0), 1)},
-        "Aerobic Effect": {
-            "select": {"name": format_training_message(activity.get('aerobicTrainingEffectMessage', 'Unknown'))}
-        },
-        "Anaerobic": {"number": round(activity.get('anaerobicTrainingEffect', 0), 1)},
-        "Anaerobic Effect": {
-            "select": {"name": format_training_message(activity.get('anaerobicTrainingEffectMessage', 'Unknown'))}
-        },
-        "PR": {"checkbox": activity.get('pr', False)},
-        "Fav": {"checkbox": activity.get('favorite', False)}
-    }
-
-    page = {
-        "parent": {"database_id": database_id},
-        "properties": properties,
-    }
-
-    if icon_url:
-        page["icon"] = {"type": "external", "external": {"url": icon_url}}
-
-    notion_client.pages.create(**page)
-
-
-def update_activity(notion_client: NotionClient, existing_activity: dict, new_activity: dict) -> None:
-    # Update an existing activity in the Notion database with new data
-    activity_name = new_activity.get('activityName', 'Unnamed Activity')
-    activity_type, activity_subtype = format_activity_type(
-        new_activity.get('activityType', {}).get('typeKey', 'Unknown'),
-        activity_name
-    )
-
-    # Get icon for the activity type
-    icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
-
-    properties = {
-        "Activity Type": {"select": {"name": activity_type}},
-        "Subactivity Type": {"select": {"name": activity_subtype}},
-        "Distance (km)": {"number": round(new_activity.get('distance', 0) / 1000, 2)},
-        "Duration (min)": {"number": round(new_activity.get('duration', 0) / 60, 2)},
-        "Calories": {"number": round(new_activity.get('calories', 0))},
-        "Avg Pace": {"rich_text": [{"text": {"content": format_pace(new_activity.get('averageSpeed', 0))}}]},
-        "Avg Power": {"number": round(new_activity.get('avgPower', 0), 1)},
-        "Max Power": {"number": round(new_activity.get('maxPower', 0), 1)},
-        "Training Effect": {
-            "select": {"name": format_training_effect(new_activity.get('trainingEffectLabel', 'Unknown'))}
-        },
-        "Aerobic": {"number": round(new_activity.get('aerobicTrainingEffect', 0), 1)},
-        "Aerobic Effect": {
-            "select": {"name": format_training_message(new_activity.get('aerobicTrainingEffectMessage', 'Unknown'))}
-        },
-        "Anaerobic": {"number": round(new_activity.get('anaerobicTrainingEffect', 0), 1)},
-        "Anaerobic Effect": {
-            "select": {"name": format_training_message(new_activity.get('anaerobicTrainingEffectMessage', 'Unknown'))}
-        },
-        "PR": {"checkbox": new_activity.get('pr', False)},
-        "Fav": {"checkbox": new_activity.get('favorite', False)}
-    }
-
-    update = {
-        "page_id": existing_activity['id'],
-        "properties": properties,
-    }
-
-    if icon_url:
-        update["icon"] = {"type": "external", "external": {"url": icon_url}}
-
-    notion_client.pages.update(**update)
 
 
 def main():
     load_dotenv()
 
-    # Initialize Garmin and Notion clients using environment variables
     garmin_client, garmin_configuration = get_garmin_client()
     notion_client, notion_dbs = get_notion_client()
 
     database_id = notion_dbs.activities
 
-    # Get all activities
     activities = get_all_activities(garmin_client, garmin_configuration.activity_fetch_limit)
 
-    # Process all activities
-    for activity in activities:
-        activity_date_raw: str = activity.get('startTimeGMT')
-        activity_date: datetime = (
-            datetime
-            .strptime(activity_date_raw, '%Y-%m-%d %H:%M:%S')  # Parse as format received from Garmin
-            .replace(tzinfo=UTC)  # Set timezone to UTC, as Garmin times are in GMT/UTC. Close enough.
-        )
+    # Oldest first so new rows get created in chronological order.
+    for activity in reversed(activities):
+        if not is_run(activity):
+            continue
 
-        activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
-        activity_type, activity_subtype = format_activity_type(
-            activity.get('activityType', {}).get('typeKey', 'Unknown'),
-            activity_name
-        )
+        # Create-only: existing rows are never touched, so anything you edit in Notion
+        # (Type, Description, Shoes, etc.) is never overwritten by the sync.
+        if activity_exists(notion_client, database_id, activity):
+            continue
 
-        # Check if activity already exists in Notion
-        existing_activity = activity_exists(notion_client, database_id, activity_date, activity_type, activity_name)
-
-        if existing_activity:
-            if activity_needs_update(existing_activity, activity):
-                update_activity(notion_client, existing_activity, activity)
-                # print(f"Updated: {activity_type} - {activity_name}")
-        else:
-            create_activity(notion_client, database_id, activity)
-            # print(f"Created: {activity_type} - {activity_name}")
+        create_activity(notion_client, database_id, activity)
+        print(f"Created: {format_date(activity)} - {activity.get('activityName')}")
 
 
 if __name__ == '__main__':
