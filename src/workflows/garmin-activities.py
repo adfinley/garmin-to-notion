@@ -109,17 +109,23 @@ def main():
     activities = get_all_activities(garmin_client, garmin_configuration.activity_fetch_limit)
 
     # Oldest first so new rows get created in chronological order.
+        # Oldest first so new rows get created in chronological order.
     for activity in reversed(activities):
+        name = activity.get('activityName')
+        type_key = activity.get('activityType', {}).get('typeKey')
+
         if not is_run(activity):
+            print(f"Skipped (not a run): {name} [{type_key}]")
             continue
 
         # Create-only: existing rows are never touched, so anything you edit in Notion
         # (Type, Description, Shoes, etc.) is never overwritten by the sync.
         if activity_exists(notion_client, database_id, activity):
+            print(f"Skipped (already in Notion): {format_date(activity)} - {name}")
             continue
 
         create_activity(notion_client, database_id, activity)
-        print(f"Created: {format_date(activity)} - {activity.get('activityName')}")
+        print(f"Created: {format_date(activity)} - {name}")
 
 
 if __name__ == '__main__':
