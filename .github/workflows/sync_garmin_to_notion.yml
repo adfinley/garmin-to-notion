@@ -7,7 +7,7 @@ on:
     inputs:
       GARMIN_ACTIVITIES_FETCH_LIMIT:
         type: number
-        default: 10
+        default: 5
 env:
   TZ: 'America/Toronto'
 
