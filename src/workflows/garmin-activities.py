@@ -49,7 +49,7 @@ def format_pace(average_speed: float) -> str:
 
 
 def build_properties(activity: dict) -> dict:
-    moving_seconds = activity.get("movingDuration") or activity.get("duration") or 0
+    moving_seconds = activity.get("duration") or activity.get("movingDuration") or 0
 
     properties = {
         "Activity Name": {"title": [{"text": {"content": activity.get("activityName") or "Run"}}]},
