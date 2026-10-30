@@ -29,6 +29,22 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
           GARMIN_ACTIVITIES_FETCH_LIMIT: ${{ inputs.GARMIN_ACTIVITIES_FETCH_LIMIT || '5' }}
+          GARMIN_TOKEN_OUT: ${{ runner.temp }}/garmin_token.json
           TZ: 'America/Toronto'
         run: |
           uv run python -m src.workflows.garmin-activities
+
+      # Garmin tokens expire after a few days unless the refreshed one is kept.
+      # This saves the token from this run back into the GARMIN_AUTH_TOKEN secret.
+      - name: Save refreshed Garmin token
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_PAT }}
+          GARMIN_TOKEN_OUT: ${{ runner.temp }}/garmin_token.json
+        run: |
+          if [ -s "$GARMIN_TOKEN_OUT" ]; then
+            gh secret set GARMIN_AUTH_TOKEN --repo "${{ github.repository }}" < "$GARMIN_TOKEN_OUT"
+            rm -f "$GARMIN_TOKEN_OUT"
+          else
+            echo "No token file written; leaving GARMIN_AUTH_TOKEN unchanged."
+          fi
