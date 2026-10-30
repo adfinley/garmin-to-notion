@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 
 from dotenv import load_dotenv
@@ -13,6 +14,17 @@ RUN_TYPE_KEYS = {"running", "trail_running", "track_running", "treadmill_running
 DEFAULT_RUN_TYPE = "Easy"
 
 RUNNING_ICON = "https://img.icons8.com/?size=100&id=k1l1XFkME39t&format=png&color=000000"
+
+
+def save_refreshed_token(garmin_client: GarminClient) -> None:
+    # The Garmin token may have been refreshed during login. If GARMIN_TOKEN_OUT is set,
+    # write the current token there so the workflow can save it back to the GitHub secret.
+    token_out = os.getenv("GARMIN_TOKEN_OUT")
+    if not token_out:
+        return
+    fd = os.open(token_out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+        token_file.write(garmin_client.client.dumps())
 
 
 def get_all_activities(garmin_client: GarminClient, limit: int = 1000) -> list[dict]:
@@ -102,6 +114,7 @@ def main():
     load_dotenv()
 
     garmin_client, garmin_configuration = get_garmin_client()
+    save_refreshed_token(garmin_client)
     notion_client, notion_dbs = get_notion_client()
 
     database_id = notion_dbs.activities
