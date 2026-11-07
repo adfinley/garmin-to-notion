@@ -29,6 +29,7 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
           GARMIN_ACTIVITIES_FETCH_LIMIT: ${{ inputs.GARMIN_ACTIVITIES_FETCH_LIMIT || '5' }}
+          DEFAULT_SHOE_ID: ${{ secrets.DEFAULT_SHOE_ID }}
           GARMIN_TOKEN_OUT: ${{ runner.temp }}/garmin_token.json
           TZ: 'America/Toronto'
         run: |

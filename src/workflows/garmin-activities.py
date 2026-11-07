@@ -13,6 +13,10 @@ RUN_TYPE_KEYS = {"running", "trail_running", "track_running", "treadmill_running
 # Default value for the "Type" select when a run is first created. Change it in Notion afterwards.
 DEFAULT_RUN_TYPE = "Easy"
 
+# Page ID of the shoe in the Shoes database to assign to every new run. Set it as the
+# DEFAULT_SHOE_ID secret/env var. If it's empty, Shoes is left blank.
+DEFAULT_SHOE_ID = os.getenv("DEFAULT_SHOE_ID")
+
 RUNNING_ICON = "https://img.icons8.com/?size=100&id=k1l1XFkME39t&format=png&color=000000"
 
 
@@ -70,8 +74,11 @@ def build_properties(activity: dict) -> dict:
         "Distance": {"number": round((activity.get("distance") or 0) / 1000, 2)},
         "Pace": {"rich_text": [{"text": {"content": format_pace(activity.get("averageSpeed", 0))}}]},
         "Type": {"select": {"name": DEFAULT_RUN_TYPE}},
-        # Not mapped on purpose: Zone (formula), Shoes (manual relation).
+        # Not mapped on purpose: Zone (formula).
     }
+
+    if DEFAULT_SHOE_ID:
+        properties["Shoes"] = {"relation": [{"id": DEFAULT_SHOE_ID}]}
 
     average_hr = activity.get("averageHR")
     if average_hr:
@@ -122,7 +129,6 @@ def main():
     activities = get_all_activities(garmin_client, garmin_configuration.activity_fetch_limit)
 
     # Oldest first so new rows get created in chronological order.
-        # Oldest first so new rows get created in chronological order.
     for activity in reversed(activities):
         name = activity.get('activityName')
         type_key = activity.get('activityType', {}).get('typeKey')
